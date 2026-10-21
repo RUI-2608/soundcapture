@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.venv-build/
+
+# 打包产物（exe 放到 GitHub Release 附件，不进仓库）
+build/
+dist/
+*.manifest
+
+# 运行时产物
+录音输出/
+_设备黑名单.json
+_selftest*.txt
+_selftest_tr*.wav
+_临时_*.wav
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

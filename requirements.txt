@@ -1,0 +1,9 @@
+# 源码运行所需（用 python SoundCapture.py 跑的时候装这些）
+# Python 3.9 ~ 3.12 均可，实测 3.11；官方安装器记得勾选 tcl/tk and IDLE
+
+# WASAPI 回环录音（录电脑内部声音全靠它）
+PyAudioWPatch==0.2.12.8
+
+# 可选：提供 ffmpeg 二进制。装了之后程序会自动优先用它，
+# 不装的话需要系统 PATH 里有 ffmpeg，否则 MP3 副本 / 多轨合成 / 工具页不可用
+imageio-ffmpeg

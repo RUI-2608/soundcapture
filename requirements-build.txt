@@ -1,0 +1,6 @@
+# 打包环境所需（只用来生成 exe，使用者不需要装）
+# 打包用的 Python 必须同时有 tkinter 和下面的包
+
+-r requirements.txt
+
+pyinstaller>=6.0
