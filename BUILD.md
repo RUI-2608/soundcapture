@@ -19,6 +19,12 @@ dist/
 整目录压成 zip 发出去（26 MB，压缩后约 11 MB）。**不要把 exe 单独拷出来**，
 `_internal` 不在旁边它起不来。
 
+打包时还会吃两个资源文件，缺了会报错：
+
+- `rui.ico` —— 窗口 / 任务栏图标，spec 里既当 `icon=` 写进 exe 资源，也当 `datas` 打进包内
+- `version_info.txt` —— exe 的版本资源（公司 `RUI`、产品 `SoundCapture by RUI`、版权），
+  对应 spec 里的 `version=`；右键 exe → 属性 → 详细信息 能看到
+
 ---
 
 ## 1. 准备打包环境
@@ -122,11 +128,8 @@ RESULT=OK
 
 ### 6.1 仓库里放什么
 
-> 不想手动敲命令的话，直接看 [`发布步骤.md`](发布步骤.md) 并双击 `首次提交.bat`，
-> 它会替你问清楚用户名 / 邮箱 / 仓库名，然后完成下面的提交和打 tag。
-
-源码 + 文档 + spec，二进制不进仓库（`.gitignore` 已排除 `dist/`、`build/`、`录音输出/`、
-`_设备黑名单.json`、`_selftest*.txt`）。
+源码 + 文档 + spec + 图标/版本资源，二进制不进仓库（`.gitignore` 已排除 `dist/`、`build/`、
+`录音输出/`、`_设备黑名单.json`、`_selftest*.txt`）。
 
 ```bat
 git init
@@ -141,7 +144,8 @@ git remote add origin https://github.com/<你的用户名>/<仓库名>.git
 git push -u origin main
 ```
 
-`git add .` 之后务必看一眼 `git status`：只应有源码、文档、spec、requirements 和 .gitignore；
+`git add .` 之后务必看一眼 `git status`：只应有源码、文档、spec、`rui.ico`、`version_info.txt`、
+requirements 和 .gitignore；
 出现 `dist/`、`build/`、`录音输出/` 说明 .gitignore 没生效，先排查再提交。
 
 ### 6.2 打 tag 并上传 exe

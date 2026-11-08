@@ -18,6 +18,7 @@ import math
 import os
 import queue
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -87,13 +88,71 @@ OUT_DIR = APP_DIR / "录音输出"
 PROC_DIR = OUT_DIR / "处理输出"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-FFMPEG = (
-    r"C:\Users\Administrator\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies"
-    r"\python\Lib\site-packages\imageio_ffmpeg\binaries\ffmpeg-win-x86_64-v7.1.exe"
-)
-FFMPEG = FFMPEG if Path(FFMPEG).exists() else "ffmpeg"
+def _find_ffmpeg():
+    """找一个能用的 ffmpeg，顺序：环境变量 → 软件目录 → imageio 自带 → PATH。
+
+    之前这里写死了一台机器上的绝对路径，换台电脑就静默失效（MP3 副本
+    直接不见）。改成按顺序试探，找不到也只是少个转码功能，不影响录音。
+    """
+    cands = []
+    if os.environ.get("FFMPEG_PATH"):
+        cands.append(Path(os.environ["FFMPEG_PATH"]))
+    roots = [APP_DIR]
+    if getattr(sys, "_MEIPASS", None):
+        roots.append(Path(sys._MEIPASS))
+    for r in roots:
+        cands += [r / "ffmpeg.exe", r / "_internal" / "ffmpeg.exe",
+                  r / "bin" / "ffmpeg.exe"]
+    try:
+        import imageio_ffmpeg
+        cands.append(Path(imageio_ffmpeg.get_ffmpeg_exe()))
+    except Exception:
+        pass
+    for c in cands:
+        try:
+            if c.is_file():
+                return str(c)
+        except OSError:
+            pass
+    return shutil.which("ffmpeg") or "ffmpeg"
+
+
+FFMPEG = _find_ffmpeg()
+
+
+def ff_ready():
+    """ffmpeg 是否真的能用。拿不到只是少了转码，录音功能不受影响。"""
+    if FFMPEG == "ffmpeg":
+        return bool(shutil.which("ffmpeg"))
+    try:
+        return Path(FFMPEG).is_file()
+    except OSError:
+        return False
 
 AUDIO_EXT = {".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".wma"}
+
+# ---------------------------------------------------------------- 个人标识
+# RUI：作者署名。界面上的徽标、任务栏图标、窗口标题、音频文件标签、
+# 自检日志都从这里取，改一处就整体换名，不用满文件搜字符串。
+BRAND = "RUI"
+APP_NAME = "SoundCapture"
+APP_VER = "1.0.0"
+BRAND_SIGN = f"{APP_NAME} by {BRAND}"
+
+
+def icon_path():
+    """任务栏/窗口图标的位置：源码运行时在本目录，打包后在解包目录。"""
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        for cand in (Path(base) / "rui.ico", Path(base) / "_internal" / "rui.ico"):
+            if cand.exists():
+                return cand
+    here = (Path(sys.executable).parent if getattr(sys, "frozen", False)
+            else Path(__file__).resolve().parent)
+    for cand in (here / "rui.ico", APP_DIR / "rui.ico"):
+        if cand.exists():
+            return cand
+    return None
 
 BG = "#1b1d21"
 PANEL = "#24272d"
@@ -214,6 +273,61 @@ def probe_duration(path):
             pass
     _DUR_CACHE[key] = dur
     return dur
+
+
+def tag_wav(path, title="", comment=""):
+    """给 WAV 补一个 RIFF LIST/INFO 标签块，写上作者标识。
+
+    做法是在文件末尾追加一个 LIST 块，并把头部 RIFF 长度改掉——音频
+    data 块一个字节都不动，播放器、ffmpeg、wave 模块都照常读（它们
+    读到 data 就停）。已经标过的不重复追加。
+    """
+    p = Path(path)
+    try:
+        raw = p.read_bytes()
+    except OSError:
+        return False
+    if len(raw) < 12 or raw[:4] != b"RIFF" or raw[8:12] != b"WAVE":
+        return False
+    # 走一遍块表，确认没有 INFO 才追加（重复调用不会越标越长）
+    i, seen = 12, False
+    while i + 8 <= len(raw):
+        cid = raw[i:i + 4]
+        size = struct.unpack("<I", raw[i + 4:i + 8])[0]
+        if cid == b"LIST" and raw[i + 8:i + 12] == b"INFO":
+            seen = True
+            break
+        i += 8 + size + (size & 1)
+    if seen:
+        return False
+
+    def sub(tag, text):
+        data = text.encode("utf-8") + b"\x00"
+        return tag + struct.pack("<I", len(data)) + data + (b"\x00" if len(data) & 1 else b"")
+
+    body = b"INFO" + sub(b"IART", BRAND) + sub(b"ISFT", BRAND_SIGN)
+    if title:
+        body += sub(b"INAM", title)
+    if comment:
+        body += sub(b"ICMT", comment)
+    chunk = b"LIST" + struct.pack("<I", len(body)) + body + (b"\x00" if len(body) & 1 else b"")
+    out = raw + chunk
+    out = out[:4] + struct.pack("<I", len(out) - 8) + out[8:]
+    try:
+        p.write_bytes(out)
+    except OSError:
+        return False
+    return True
+
+
+def meta_args(title=None):
+    """写进音频文件的作者标签（ffmpeg 的 -metadata 对 mp3/m4a/flac/ogg 都有效）。"""
+    a = ["-metadata", f"artist={BRAND}",
+         "-metadata", f"album={APP_NAME}",
+         "-metadata", f"encoded_by={BRAND_SIGN}"]
+    if title:
+        a += ["-metadata", f"title={title}"]
+    return a
 
 
 def probe_level(path):
@@ -717,7 +831,7 @@ class MiniBar(tk.Toplevel):
         self.geometry(f"{w}x{h}+{sw - w - P(28)}+{sh - h - P(84)}")
         # 只给背景和文字绑拖动，按钮留给点击（否则会拖不动/点不中）
         for wdg in (self, self.bar, self.dot, self.lbl_state,
-                    self.lbl_time, self.mini_meter):
+                    self.lbl_time, self.mini_meter, self.lbl_brand):
             wdg.bind("<Button-1>", self._down)
             wdg.bind("<B1-Motion>", self._move)
             wdg.bind("<ButtonRelease-1>", self._up)
@@ -755,7 +869,11 @@ class MiniBar(tk.Toplevel):
                                   activebackground="#f0705f",
                                   command=self.app._stop)
         self.btn_stop.pack(side="left", padx=P(6))
-        tk.Button(btns, text="⤢ 展开主窗口", font=FONT, bg="#3a4049", fg=FG,
+        # 右下角角落留个作者标识，悬浮时也能认出是谁做的
+        self.lbl_brand = tk.Label(btns, text="R U I", font=("Consolas", 8, "bold"),
+                                  bg="#15171a", fg="#7b8792")
+        self.lbl_brand.pack(side="right", padx=(P(6), P(2)))
+        tk.Button(btns, text="⤢ 展开", font=FONT, bg="#3a4049", fg=FG,
                   relief="flat", padx=P(12), pady=P(3),
                   activebackground="#454b56",
                   command=self.app.restore_main).pack(side="right")
@@ -809,7 +927,19 @@ class MiniBar(tk.Toplevel):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("内录工作台 · SoundCapture")
+        self.title(f"内录工作台 · {APP_NAME} — {BRAND}")
+        # 任务栏图标只认进程的 AppUserModelID，不设的话会跟一堆 python 图标混在一起
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                f"{BRAND}.{APP_NAME}.{APP_VER}")
+        except Exception:
+            pass
+        ico = icon_path()
+        if ico:
+            try:
+                self.iconbitmap(default=str(ico))
+            except Exception:
+                pass
         # 窗口尺寸按 DPI 放大，同时不超出屏幕可用区域
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         w = min(P(980), sw - P(30))
@@ -901,13 +1031,23 @@ class App(tk.Tk):
         s.configure("TProgressbar", background=ACCENT, troughcolor=CARD, borderwidth=0)
         s.configure("Horizontal.TScale", background=PANEL, troughcolor=CARD)
 
+    def _brand_chip(self, parent):
+        """作者标识章：RUI。深底 + 强调色字 + 1px 描边，放在页头最左侧。"""
+        return tk.Label(parent, text="R U I", font=("Consolas", 8, "bold"),
+                        bg="#20242a", fg=ACCENT, padx=P(8), pady=P(3),
+                        bd=0, highlightthickness=P(1),
+                        highlightbackground="#3d7f73")
+
     def _build(self):
         head = tk.Frame(self, bg=PANEL, height=P(56))
         head.pack(fill="x", side="top")
         head.pack_propagate(False)
+        self._brand_chip(head).pack(side="left", padx=(P(18), P(12)))
         tk.Label(head, text="内录工作台", font=FONT_TITLE, bg=PANEL, fg=FG).pack(
-            side="left", padx=P(20))
-        tk.Label(head, text="SoundCapture · 电脑内部声音 / 麦克风录制与音频处理",
+            side="left")
+        tk.Frame(head, bg="#3a3f47", width=P(1), height=P(18)).pack(
+            side="left", padx=P(12), pady=(P(2), 0))
+        tk.Label(head, text=f"{APP_NAME} · 电脑内部声音 / 麦克风录制与音频处理",
                  font=FONT, bg=PANEL, fg=DIM).pack(side="left", pady=(P(8), 0))
         self.status_var = tk.StringVar(value="就绪")
         tk.Label(head, textvariable=self.status_var, font=FONT, bg=PANEL,
@@ -922,6 +1062,17 @@ class App(tk.Tk):
                        highlightthickness=0, activebackground=PANEL,
                        activeforeground="#101214", indicatoron=0,
                        padx=P(10), pady=P(4)).pack(side="right", padx=P(6))
+
+        # 页脚：风格上就是一条签名带——左边说清「不上传」，右边留作者标识
+        foot = tk.Frame(self, bg=BG, height=P(26))
+        foot.pack(fill="x", side="bottom")
+        foot.pack_propagate(False)
+        tk.Label(foot, text="全部处理在本机完成 · 不联网、不上传任何音频",
+                 font=FONT, bg=BG, fg="#5f6b74").pack(side="left", padx=P(20))
+        tk.Label(foot, text=f"{BRAND} · {APP_NAME} v{APP_VER}",
+                 font=("Consolas", 8, "bold"), bg=BG, fg="#5f6b74").pack(
+            side="right", padx=(0, P(20)))
+        tk.Frame(self, bg="#2f343b", height=P(1)).pack(fill="x", side="bottom")
 
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True, padx=P(12), pady=P(12))
@@ -1726,13 +1877,21 @@ class App(tk.Tk):
             if self.auto_mp3.get():
                 mp3 = master.with_suffix(".mp3")
                 mp3 = master.parent / (master.stem + ".mp3")
-                ff("-i", str(master), "-codec:a", "libmp3lame",
-                   "-b:a", self.bitrate.get(), str(mp3))
+                if not ff_ready():
+                    # 找不到 ffmpeg 时别装作转过了，直接在状态栏说清楚
+                    self.status_var.set("已保存 WAV（未找到 ffmpeg，MP3 副本跳过）")
+                else:
+                    ff("-i", str(master), "-codec:a", "libmp3lame",
+                       "-b:a", self.bitrate.get(), *meta_args(master.stem), str(mp3))
                 if mp3.exists():
                     produced.append((mp3, f"【压缩副本】上面那一版成片的 MP3（{self.bitrate.get()}）\n"
                                           f"    内容与 {master.name} 完全相同，"
                                           "只是压缩过：体积约为 WAV 的十分之一，"
                                           "方便发微信、上传平台；不再做二次编辑"))
+        # 每条 WAV 补上作者标签：追加 RIFF INFO 块，音频数据一个字节不动
+        for pth, _ in produced:
+            if pth.suffix.lower() == ".wav" and pth.exists():
+                tag_wav(pth, title=pth.stem, comment=f"{BRAND} · 内录工作台")
         used = [f"{t.name}（{t.rate} Hz）" for t in rec.tracks]
         chosen = [d["index"] for d in rec.devs]
         switched = [t for t in rec.tracks
@@ -1864,6 +2023,7 @@ class App(tk.Tk):
                     args += ["-codec:a", "aac", "-b:a", br]
                 elif tgt == "ogg":
                     args += ["-codec:a", "libvorbis", "-b:a", br]
+                args += meta_args(p.stem)
                 args.append(str(out))
                 rc, tail = ff(*args)
                 self.after(0, lambda o=out, c=rc, t=tail:
@@ -1993,7 +2153,8 @@ def selftest(seconds=2.0):
         r = Recorder(srcs, q, evt, seconds)
         r.start()
         r.join(timeout=40)
-        lines = [f"root={root}", f"devices={len(devs)} loopback={len(loops)} mic={len(mics)}",
+        lines = [f"brand={BRAND_SIGN} v{APP_VER}",
+                 f"root={root}", f"devices={len(devs)} loopback={len(loops)} mic={len(mics)}",
                  f"sources={len(srcs)}", f"elapsed={r.elapsed:.2f}", f"err={r.error}"]
         for i, tr in enumerate(r.tracks):
             out = root / f"_selftest_tr{i}.wav"
