@@ -110,26 +110,8 @@ python SoundCapture.py
 
 ---
 
-## 六、作者标识
 
-软件内所有署名统一取自源码顶部的 `BRAND` 常量（默认 `RUI`），改一行即可整体替换：
-
-| 位置 | 表现 |
-|---|---|
-| 页头左侧 | `R U I` 字标（等宽字 + 强调色描边） |
-| 页脚右侧 | `RUI · SoundCapture v1.0.0` |
-| 悬浮条右下角 | `R U I` 小字标 |
-| 窗口标题 / 任务栏 | `内录工作台 · SoundCapture — RUI`，图标为强调色方章 + `R` |
-| exe 属性（右键 → 详细信息） | 公司 `RUI`、产品 `SoundCapture by RUI`、版权 `Copyright (c) 2026 RUI` |
-| 录音文件 | WAV 写入 RIFF `IART`/`ISFT`/`INAM` 标签，MP3 写入 `artist`/`album`/`encoded_by`，播放器里可见 |
-| 自检日志 | `brand=SoundCapture by RUI v1.0.0` |
-
-音频标签是在写盘之后追加的：WAV 只多一个 `LIST/INFO` 块（音频数据一个字节不动），
-MP3 是编码时交给 ffmpeg 的元数据，两者都不影响时长与音质。
-
----
-
-## 七、目录结构
+## 六、目录结构
 
 ```
 内录工作台/
@@ -147,20 +129,6 @@ MP3 是编码时交给 ffmpeg 的元数据，两者都不影响时长与音质�
 
 打包后产物在 `dist/SoundCapture/`（onedir 模式，约 26 MB，压缩后约 11 MB），
 整目录压缩后即可分发；`dist/` 和 `build/` 都不进仓库。
-
----
-
-## 八、从源码打包
-
-一句话版：
-
-```bat
-pip install -r requirements-build.txt
-pyinstaller --noconfirm --clean SoundCapture.spec
-dist\SoundCapture\SoundCapture.exe --selftest 3
-```
-
-完整流程、自检判定、ffmpeg 处理、发布 Release 的 git 命令，见 [`BUILD.md`](BUILD.md)。
 
 ---
 
